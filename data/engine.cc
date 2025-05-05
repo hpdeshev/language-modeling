@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <bitset>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <sstream>
@@ -37,7 +36,7 @@ class Client final : public Engine::Observer, public Engine::Logger {
 
  private:
   void Log(Level, const std::string&) override {}
-  void OnGameStarted(int8_t) override {}
+  void OnGameStarted(int) override {}
   void OnGameUpdated(Side, const Board::Data&) override {}
   void OnGameEnded(Side side_that_wins) override {
     side_that_wins_ = side_that_wins;
@@ -68,29 +67,39 @@ bool Engine::StartGame(const Options* options) {
   history_.clear();
   observer_.OnGameStarted(Config::kBoardSize);
 
-  if (GetCount(side_to_move_).empty()) {
+  auto side_has_pieces = HasPieces(side_to_move_);
+  auto rev_side = Reverse(side_to_move_);
+  auto rev_side_has_pieces = HasPieces(rev_side);
+  if (!side_has_pieces) {
     observer_.OnGameUpdated(Side::kUnset, static_cast<Board::Data>(board_));
-    if (GetCount(Reverse(side_to_move_)).empty()) {
-      OnGameEnded(Side::kNeutral);
+    if (rev_side_has_pieces) {
+      OnGameEnded(rev_side);
     } else {
-      OnGameEnded(Reverse(side_to_move_));
+      OnGameEnded(Side::kNeutral);
     }
     side_to_move_ = Side::kUnset;
     return true;
   }
 
-  if (GetCount(Reverse(side_to_move_)).empty()) {
+  if (!rev_side_has_pieces) {
     observer_.OnGameUpdated(Side::kUnset, static_cast<Board::Data>(board_));
     OnGameEnded(side_to_move_);
     side_to_move_ = Side::kUnset;
     return true;
   }
 
-  auto can_move = this->CanMove(side_to_move_);
-  auto can_take = this->CanTake(side_to_move_);
+  const auto& coords = GetCoords(side_to_move_);
+  auto can_move = std::any_of(coords.begin(), coords.end(),
+                              [this](const Coord& c){
+                                return CanMove(c.x(), c.y());
+                              });
+  auto can_take = std::any_of(coords.begin(), coords.end(),
+                              [this](const Coord& c){
+                                return CanTake(c.x(), c.y());
+                              });
   if (!can_move && !can_take) {
     observer_.OnGameUpdated(Side::kUnset, static_cast<Board::Data>(board_));
-    OnGameEnded(Reverse(side_to_move_));
+    OnGameEnded(rev_side);
     side_to_move_ = Side::kUnset;
     return true;
   }
@@ -124,7 +133,7 @@ bool Engine::StartGame(const Options* options) {
   return true;
 }
 
-bool Engine::TryAt(int8_t x, int8_t y) {
+bool Engine::TryAt(int x, int y) {
   std::ostringstream oss;
   oss << __func__ << " (x=" << +x << ",y=" << +y << ")";
   logger_.Log(Logger::Level::kInfo, oss.str() + std::string{'\n'});
@@ -133,31 +142,31 @@ bool Engine::TryAt(int8_t x, int8_t y) {
 
   auto result = true;
   if (CanTake(x, y, MoveDirection::kTopLeft)) {
-    dirs |= static_cast<int8_t>(MoveDirection::kTopLeft);
+    dirs |= static_cast<uint>(MoveDirection::kTopLeft);
   }
   if (CanTake(x, y, MoveDirection::kTopRight)) {
-    dirs |= static_cast<int8_t>(MoveDirection::kTopRight);
+    dirs |= static_cast<uint>(MoveDirection::kTopRight);
   }
   if (CanTake(x, y, MoveDirection::kBottomLeft)) {
-    dirs |= static_cast<int8_t>(MoveDirection::kBottomLeft);
+    dirs |= static_cast<uint>(MoveDirection::kBottomLeft);
   }
   if (CanTake(x, y, MoveDirection::kBottomRight)) {
-    dirs |= static_cast<int8_t>(MoveDirection::kBottomRight);
+    dirs |= static_cast<uint>(MoveDirection::kBottomRight);
   }
   if (dirs.count() == 1) {
     result = Take(x, y, static_cast<MoveDirection>(dirs.to_ullong()));
   } else if (dirs.count() == 0) {
     if (CanMove(x, y, MoveDirection::kTopLeft)) {
-      dirs |= static_cast<int8_t>(MoveDirection::kTopLeft);
+      dirs |= static_cast<uint>(MoveDirection::kTopLeft);
     }
     if (CanMove(x, y, MoveDirection::kTopRight)) {
-      dirs |= static_cast<int8_t>(MoveDirection::kTopRight);
+      dirs |= static_cast<uint>(MoveDirection::kTopRight);
     }
     if (CanMove(x, y, MoveDirection::kBottomLeft)) {
-      dirs |= static_cast<int8_t>(MoveDirection::kBottomLeft);
+      dirs |= static_cast<uint>(MoveDirection::kBottomLeft);
     }
     if (CanMove(x, y, MoveDirection::kBottomRight)) {
-      dirs |= static_cast<int8_t>(MoveDirection::kBottomRight);
+      dirs |= static_cast<uint>(MoveDirection::kBottomRight);
     }
     if (dirs.count() == 1) {
       result = Move(x, y, static_cast<MoveDirection>(dirs.to_ullong()));
@@ -189,7 +198,7 @@ bool Engine::Revert() {
 bool Engine::CanMove(Side side) const {
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side)) {
         Coord coord = piece_it.GetCoord();
         if (CanMove(coord.x(), coord.y())) {
@@ -201,14 +210,14 @@ bool Engine::CanMove(Side side) const {
   return false;
 }
 
-bool Engine::CanMove(int8_t x, int8_t y) const {
+bool Engine::CanMove(int x, int y) const {
   return (CanMove(x, y, MoveDirection::kTopLeft) ||
           CanMove(x, y, MoveDirection::kTopRight) ||
           CanMove(x, y, MoveDirection::kBottomLeft) ||
           CanMove(x, y, MoveDirection::kBottomRight));
 }
 
-bool Engine::CanMove(int8_t x, int8_t y, MoveDirection dir) const {
+bool Engine::CanMove(int x, int y, MoveDirection dir) const {
   if (MoveDirection::kUnset == dir) {
     return false;
   }
@@ -238,8 +247,8 @@ bool Engine::CanMove(int8_t x, int8_t y, MoveDirection dir) const {
       }
     }
 
-    const Piece* const& pend = board_(static_cast<int8_t>(coord.x() + Dx(dir)),
-                                      static_cast<int8_t>(coord.y() + Dy(dir)));
+    const Piece* const& pend = board_(coord.x() + Dx(dir),
+                                      coord.y() + Dy(dir));
     if (pend) {
       return false;
     }
@@ -249,7 +258,7 @@ bool Engine::CanMove(int8_t x, int8_t y, MoveDirection dir) const {
   return true;
 }
 
-bool Engine::Move(int8_t x, int8_t y, MoveDirection dir) {
+bool Engine::Move(int x, int y, MoveDirection dir) {
   std::ostringstream oss;
   oss << __func__ << " (x=" << +x << ",y=" << +y << ") -> " << Stringify(dir);
   logger_.Log(Logger::Level::kInfo, oss.str() + std::string{'\n'});
@@ -280,7 +289,7 @@ bool Engine::Move(int8_t x, int8_t y, MoveDirection dir) {
 bool Engine::CanTake(Side side) const {
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side)) {
         Coord coord = piece_it.GetCoord();
         if (CanTake(coord.x(), coord.y())) {
@@ -292,14 +301,14 @@ bool Engine::CanTake(Side side) const {
   return false;
 }
 
-bool Engine::CanTake(int8_t x, int8_t y) const {
+bool Engine::CanTake(int x, int y) const {
   return (CanTake(x, y, MoveDirection::kTopLeft) ||
           CanTake(x, y, MoveDirection::kTopRight) ||
           CanTake(x, y, MoveDirection::kBottomLeft) ||
           CanTake(x, y, MoveDirection::kBottomRight));
 }
 
-bool Engine::CanTake(int8_t x, int8_t y, MoveDirection dir) const {
+bool Engine::CanTake(int x, int y, MoveDirection dir) const {
   if (MoveDirection::kUnset == dir) {
     return false;
   }
@@ -329,14 +338,14 @@ bool Engine::CanTake(int8_t x, int8_t y, MoveDirection dir) const {
       }
     }
 
-    const Piece* const& pmid = board_(static_cast<int8_t>(coord.x() + Dx(dir)),
-                                      static_cast<int8_t>(coord.y() + Dy(dir)));
+    const Piece* const& pmid = board_(coord.x() + Dx(dir),
+                                      coord.y() + Dy(dir));
     if (!pmid || (pmid->side() == pbeg->side())) {
       return false;
     }
 
-    Coord take_pos{static_cast<int8_t>(coord.x() + 2 * Dx(dir)),
-                   static_cast<int8_t>(coord.y() + 2 * Dy(dir))};
+    Coord take_pos{coord.x() + 2 * Dx(dir),
+                   coord.y() + 2 * Dy(dir)};
     const Piece* const& pend = board_(take_pos);
     if (pend) {
       return false;
@@ -347,7 +356,7 @@ bool Engine::CanTake(int8_t x, int8_t y, MoveDirection dir) const {
   return true;
 }
 
-bool Engine::Take(int8_t x, int8_t y, MoveDirection dir) {
+bool Engine::Take(int x, int y, MoveDirection dir) {
   std::ostringstream oss;
   oss << __func__ << " (x=" << +x << ",y=" << +y << ") -> " << Stringify(dir);
   logger_.Log(Logger::Level::kInfo, oss.str() + std::string{'\n'});
@@ -373,7 +382,7 @@ bool Engine::Take(int8_t x, int8_t y, MoveDirection dir) {
 
 std::vector<HistoryItem> Engine::GetHistory(int size) {
   std::vector<HistoryItem> history_items;
-  auto absz = [](int8_t sz) {
+  auto absz = [](int sz) {
     return (sz >= 0) ? sz : -sz;
   };
   size = (size < 0) ? absz(size) : (size == 0) ? history_.size() : size;
@@ -392,18 +401,18 @@ std::vector<HistoryItem> Engine::GetHistory(int size) {
                                (*it)->num_seq_moves(),
                                (*it)->num_promo_paths());
   }
-  const std::map<Side, int8_t> num_kings{
+  const std::map<Side, int> num_kings{
     {Side::kLight,
-     static_cast<int8_t>(GetCount(Side::kLight, Level::kKing).size())},
+     GetPiecesCount(Side::kLight, Level::kKing)},
     {Side::kDark,
-     static_cast<int8_t>(GetCount(Side::kDark, Level::kKing).size())}};
-  const std::map<Side, int8_t> num_men{
+     GetPiecesCount(Side::kDark, Level::kKing)}};
+  const std::map<Side, int> num_men{
     {Side::kLight,
-     static_cast<int8_t>(GetCount(Side::kLight, Level::kMan).size())},
+     GetPiecesCount(Side::kLight, Level::kMan)},
     {Side::kDark,
-     static_cast<int8_t>(GetCount(Side::kDark, Level::kMan).size())}
+     GetPiecesCount(Side::kDark, Level::kMan)}
   };
-  const std::map<Side, int8_t> num_promo_paths{
+  const std::map<Side, int> num_promo_paths{
     {Side::kLight, GetPromoPaths(Side::kLight)},
     {Side::kDark, GetPromoPaths(Side::kDark)}
   };
@@ -424,7 +433,7 @@ std::pair<bool, std::list<Command::Ptr>> Engine::Proceed() {
   auto can_take = this->CanTake(side_to_move_);
   if (can_move || can_take) {
     if (!can_take && (GameType::kAnalysis != options_.game_type)) {
-      auto count = GetCount(side_to_move_);
+      auto count = GetCoords(side_to_move_);
       if (count.size() == 1) {
         commands = GetAutoCommands(count.front());
         if (commands.empty()) {
@@ -447,29 +456,74 @@ std::pair<bool, std::list<Command::Ptr>> Engine::Proceed() {
   return {can_proceed, std::move(commands)};
 }
 
-std::list<Coord> Engine::GetCount() const {
-  std::list<Coord> count;
-  auto curr_count = GetCount(side_to_move_);
-  count.insert(count.end(), curr_count.begin(), curr_count.end());
-  auto next_count = GetCount(Reverse(side_to_move_));
-  count.insert(count.end(), next_count.begin(), next_count.end());
+bool Engine::HasPieces(Side side) const {
+  for (const auto& row : board_) {
+    for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
+      auto piece = *piece_it;
+      if (piece && (piece->side() == side)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+int Engine::GetPiecesCount(Side side) const {
+  int count = 0;
+  for (const auto& row : board_) {
+    for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
+      auto piece = *piece_it;
+      if (piece && (piece->side() == side)) {
+        ++count;
+      }
+    }
+  }
   return count;
 }
 
-std::list<Coord> Engine::GetCount(Side side) const {
-  std::list<Coord> count;
-  auto men_count = GetCount(side, Level::kMan);
-  count.insert(count.end(), men_count.begin(), men_count.end());
-  auto kings_count = GetCount(side, Level::kKing);
-  count.insert(count.end(), kings_count.begin(), kings_count.end());
+int Engine::GetPiecesCount(Side side, Level level) const {
+  int count = 0;
+  for (const auto& row : board_) {
+    for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
+      auto piece = *piece_it;
+      if (piece && (piece->side() == side) && (piece->level() == level)) {
+        ++count;
+      }
+    }
+  }
   return count;
 }
 
-std::list<Coord> Engine::GetCount(Side side, Level level) const {
+std::list<Coord> Engine::GetCoords() const {
+  std::list<Coord> coords;
+  for (const auto& row : board_) {
+    for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
+      Coord coord = piece_it.GetCoord();
+      coords.push_back(coord);
+    }
+  }
+  return coords;
+}
+
+std::list<Coord> Engine::GetCoords(Side side) const {
+  std::list<Coord> coords;
+  for (const auto& row : board_) {
+    for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
+      auto piece = *piece_it;
+      if (piece && (piece->side() == side)) {
+        Coord coord = piece_it.GetCoord();
+        coords.push_back(coord);
+      }
+    }
+  }
+  return coords;
+}
+
+std::list<Coord> Engine::GetCoords(Side side, Level level) const {
   std::list<Coord> count;
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side) && (piece->level() == level)) {
         Coord coord = piece_it.GetCoord();
         count.push_back(coord);
@@ -505,7 +559,7 @@ std::list<Command::Ptr> Engine::GetMoves(Side side) const {
   std::list<Command::Ptr> moves;
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side)) {
         Coord coord = piece_it.GetCoord();
         auto moves_by_pos = GetMoves(coord);
@@ -545,8 +599,8 @@ std::list<Command::Ptr> Engine::GetMoves(const Coord& pos) const {
 
 std::list<Command::Ptr> Engine::GetTakes() const {
   std::list<Command::Ptr> takes;
-  for (int8_t x{1}; x <= Config::kBoardSize; ++x) {
-    for (int8_t y{1}; y <= Config::kBoardSize; ++y) {
+  for (int x{1}; x <= Config::kBoardSize; ++x) {
+    for (int y{1}; y <= Config::kBoardSize; ++y) {
       auto takes_by_pos = GetTakes(Coord{x, y});
       for (auto& take : takes_by_pos) {
         takes.push_back(std::move(take));
@@ -560,7 +614,7 @@ std::list<Command::Ptr> Engine::GetTakes(Side side) const {
   std::list<Command::Ptr> takes;
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side)) {
         Coord coord = piece_it.GetCoord();
         auto takes_by_pos = GetTakes(coord);
@@ -577,7 +631,7 @@ int Engine::GetTakesCount(Side side) const {
   int count{};
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side)) {
         Coord coord = piece_it.GetCoord();
         if (CanTake(coord.x(), coord.y(),
@@ -627,15 +681,15 @@ std::list<Command::Ptr> Engine::GetTakes(const Coord& pos) const {
   return takes;
 }
 
-int8_t Engine::GetPromoPaths(Side side) {
-  int8_t count{};
+int Engine::GetPromoPaths(Side side) {
+  int count{};
   Side last_side_to_move = side_to_move_;
   if (side_to_move_ != side) {
     side_to_move_ = side;
   }
   for (const auto& row : board_) {
     for (auto piece_it = row.begin(); piece_it != row.end(); ++piece_it) {
-      auto& piece = *piece_it;
+      auto piece = *piece_it;
       if (piece && (piece->side() == side) && (piece->level() == Level::kMan)) {
         Coord coord = piece_it.GetCoord();
         if (FindPromoPath(coord, MoveDirection::kTopLeft)) {
@@ -663,8 +717,8 @@ bool Engine::FindPromoPath(const Coord& prev, MoveDirection dir) {
   if (!CanMove(prev.x(), prev.y(), dir)) {
     return false;
   }
-  Coord next{static_cast<int8_t>(prev.x() + Dx(dir)),
-              static_cast<int8_t>(prev.y() + Dy(dir))};
+  Coord next{prev.x() + Dx(dir),
+             prev.y() + Dy(dir)};
   if ((next.x() == 1) || (next.x() == Config::kBoardSize)) {
     return true;
   }
@@ -691,7 +745,7 @@ bool Engine::FindPromoPath(const Coord& prev, MoveDirection dir) {
   return found;
 }
 
-void Engine::BeforeMove(Side side_to_move, int8_t num_seq_moves) {
+void Engine::BeforeMove(Side side_to_move, int num_seq_moves) {
   if ((side_to_move != Side::kUnset) && (side_to_move != Side::kNeutral)) {
     side_to_move_ = side_to_move;
     num_seq_moves_ = num_seq_moves;
@@ -718,7 +772,7 @@ std::list<Command::Ptr> Engine::AfterMove() {
   return std::move(to_proceed.second);
 }
 
-void Engine::BeforeTake(Side side_to_move, int8_t num_seq_moves) {
+void Engine::BeforeTake(Side side_to_move, int num_seq_moves) {
   if ((side_to_move != Side::kUnset) && (side_to_move != Side::kNeutral)) {
     side_to_move_ = side_to_move;
     num_seq_moves_ = num_seq_moves;
